@@ -1,0 +1,9 @@
+{
+  "name": "omp-effort",
+  "version": "0.1.0",
+  "description": "omp extension: show the thinking effort (reasoning level) in the status line, including for local engines whose built-in readout stays blank",
+  "type": "module",
+  "main": "index.ts",
+  "license": "MIT",
+  "scripts": { "test": "bun test" }
+}
