@@ -44,13 +44,11 @@ model and no `reasoning_effort`, so the footer reports intent, not decode.
 ## Install
 
 ```sh
-git clone https://github.com/danieljohnmorris/omp-effort
-cd omp-effort
-./install.sh        # copies index.ts to ~/.omp/agent/extensions/omp-effort/
+omp plugin marketplace add danieljohnmorris/omp-plugins
+omp plugin install effort@omp-plugins
 ```
 
-omp auto-discovers extensions in `~/.omp/agent/extensions/`. Restart omp after
-installing. `OMP_EXTENSIONS_DIR` overrides the target directory.
+Restart omp after installing: extension modules load at startup.
 
 ## Tests
 

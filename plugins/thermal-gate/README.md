@@ -25,13 +25,11 @@ It is client-side only. Nothing on the cluster or the inference server changes.
 ## Install
 
 ```sh
-git clone https://github.com/danieljohnmorris/omp-thermal-gate
-cd omp-thermal-gate
-./install.sh        # copies index.ts to ~/.omp/agent/extensions/thermal-gate/
+omp plugin marketplace add danieljohnmorris/omp-plugins
+omp plugin install thermal-gate@omp-plugins
 ```
 
-omp auto-discovers extensions in `~/.omp/agent/extensions/`. Restart omp after
-installing.
+Restart omp after installing: extension modules load at startup.
 
 ## Enable: set the environment
 

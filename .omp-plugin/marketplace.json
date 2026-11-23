@@ -1,0 +1,54 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "omp-plugins",
+  "owner": {
+    "name": "Dan"
+  },
+  "metadata": {
+    "description": "omp plugins by Daniel Morris: status readouts, themes, routing, cluster gates and review/unblock roles",
+    "version": "0.1.0",
+    "pluginRoot": "plugins"
+  },
+  "plugins": [
+    {
+      "name": "effort",
+      "source": "./plugins/effort",
+      "description": "Show the thinking effort (reasoning level) in the status area, including for local engines whose built-in readout stays blank.",
+      "category": "appearance",
+      "version": "0.1.0",
+      "keywords": ["status", "reasoning", "effort"]
+    },
+    {
+      "name": "omarchy-theme",
+      "source": "./plugins/omarchy-theme",
+      "description": "Derive omp's TUI theme from the current Omarchy theme colors and follow theme changes live.",
+      "category": "appearance",
+      "version": "0.1.0",
+      "keywords": ["omarchy", "theme", "colors", "tui"]
+    },
+    {
+      "name": "thermal-gate",
+      "source": "./plugins/thermal-gate",
+      "description": "Hold requests to a hot DGX Spark cluster until it cools, and refuse new Sparks subagents while Machinist is busy.",
+      "category": "development",
+      "version": "0.2.0",
+      "keywords": ["dgx-spark", "thermal", "gate"]
+    },
+    {
+      "name": "jev-router",
+      "source": "./plugins/jev-router",
+      "description": "Route each turn to a model, and each delegated task to an agent, using a Jev capability classification plus live provider quota.",
+      "category": "development",
+      "version": "0.1.0",
+      "keywords": ["router", "models", "quota"]
+    },
+    {
+      "name": "roles",
+      "source": "./plugins/roles",
+      "description": "pr-reviewer (read-only PR/branch review on the review role) and unblocker (fresh-eyes help after 30+ minutes going in circles, on the unblock role).",
+      "category": "development",
+      "version": "0.1.0",
+      "keywords": ["review", "agents", "roles", "unblock"]
+    }
+  ]
+}

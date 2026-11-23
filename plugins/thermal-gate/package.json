@@ -4,6 +4,7 @@
   "description": "omp extension: hold requests to a hot DGX Spark cluster, and refuse new Sparks subagents while Machinist is busy",
   "type": "module",
   "main": "index.ts",
+  "omp": { "extensions": ["./index.ts"] },
   "license": "MIT",
   "scripts": { "test": "bun test" }
 }

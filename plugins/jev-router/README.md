@@ -118,14 +118,13 @@ The mark is provider-wide, because a balance is provider-wide.
 ## Install
 
 ```
-git clone https://github.com/danieljohnmorris/omp-jev-router.git
-omp install ./omp-jev-router
+omp plugin marketplace add danieljohnmorris/omp-plugins
+omp plugin install jev-router@omp-plugins
 ```
 
-`omp install` links the directory into `~/.omp/plugins`, so it loads in every
-session with no flag. Edits to the source are picked up on the next session
-start; extensions load once per process and there is no hot reload. To try it
-without installing, pass `omp -e ./omp-jev-router/src/index.ts`.
+The plugin loads in every session with no flag. Extensions load once per process
+and there is no hot reload. To try it from a checkout without installing, pass
+`omp -e ./plugins/jev-router/src/index.ts`.
 
 Requires OMP 18.2 or later, for `ctx.models` and `ExtensionAPI.setModel`.
 

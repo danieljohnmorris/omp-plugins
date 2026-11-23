@@ -27,17 +27,15 @@ omp.
 
 ## Install
 
-From the marketplace:
-
 ```bash
-omp plugin marketplace add danieljohnmorris/omp-omarchy-theme
-omp plugin install omarchy-theme@omp-omarchy-theme
+omp plugin marketplace add danieljohnmorris/omp-plugins
+omp plugin install omarchy-theme@omp-plugins
 ```
 
 From a local checkout:
 
 ```bash
-omp plugin link /path/to/omp-omarchy-theme/plugins/omarchy-theme
+omp plugin link /path/to/omp-plugins/plugins/omarchy-theme
 ```
 
 Restart omp after installing: extension modules load at startup.
