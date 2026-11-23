@@ -1,0 +1,276 @@
+# omp-jev-router
+
+An [OMP](https://oh-my-pi.dev) extension that picks the model for each turn, and
+the agent for each delegated task, from two inputs: a Jev classification of the
+prompt, and the provider usage limits OMP already tracks.
+
+A cheap question does not need your most expensive model. A model whose weekly
+window is exhausted is not a candidate at all, however capable it is. This
+extension applies both facts before the turn starts.
+
+<img width="942" height="115" alt="Screenshot 2026-09-25 at 14 05 32" src="https://github.com/user-attachments/assets/1ec1a1f8-80ff-41bc-a68e-3fd516b280da" />
+
+
+```
+$ /jev
+main: auto
+tasks: auto
+sparks: off
+credential: loaded
+candidates (catalogue): quick=3 balanced=3 strong=3
+last main: jev · quick via jev (0.99) · anthropic/claude-haiku-4-5 · 100% left · pressure 0.99
+last tasks: jev: strong -> task
+```
+
+## Where it sits
+
+Routing happens inside OMP, before a provider call is made. There is no proxy
+process and no endpoint to run.
+
+Model roles keep deciding what a role means. A `candidates` entry may name a
+role alias such as `@slow`; the role resolves which model that is, and the
+router picks which candidate serves this turn.
+
+`retry.fallbackChains` and an agent's `model:` chain react to a call that has
+already failed. This runs before the call, so the two compose: the router skips
+a provider it knows is out of quota, and the chain still catches a failure it
+could not predict.
+
+## How a turn is routed
+
+1. The prompt, truncated to `maxPromptChars`, goes to TypeSafe's System One
+   endpoint as one `choice` question over `quick`, `balanced`, `strong`. The
+   answer is a capability **floor**: the router may pick a higher tier when
+   quota says so, never a lower one. Prompts carrying images skip the call and
+   take `strong`.
+2. Usage reports come from OMP's own auth storage — `fetchUsageReports` on builds
+   that expose it, otherwise the 18.3.x `usage.reports(options)` facet — cached
+   for `quotaMaxAgeMs`. Every window of every account of the candidate's provider is
+   evaluated:
+   - **Windows are AND.** An exhausted weekly window blocks the model even when
+     the 5-hour window is untouched.
+   - **Accounts are OR.** One account with headroom keeps the provider usable,
+     because OMP's own credential selection decides which account serves the
+     request.
+   - A window whose reset time has passed is treated as reset. A report older
+     than `quotaMaxAgeMs` counts as stale, and stale never counts as headroom.
+3. Candidates below the floor, **exhausted**, or with a context window too small
+   for the live context plus `contextReserveTokens` are dropped. Among the rest
+   the lowest quota **pressure** wins. Ties prefer the cheaper tier, and the
+   current model is kept when its headroom is comparable, so a session does not
+   churn models and lose provider cache reuse.
+4. If no surviving candidate has *readable* headroom — an OMP build with no usage
+   reporting at all, or a failed fetch — the router still picks, choosing the
+   cheapest tier that clears the floor and saying so in the status line. Only
+   `exhausted` is ever a hard exclusion; missing evidence must not silently
+   disable routing, and must not promote every turn to the strongest model.
+5. With `sparks` on, models served by your own hardware join the list and are
+   **preferred**: while a local candidate is live, cloud candidates at or below
+   the highest local tier are released, so the Jev floor alone decides when a
+   turn leaves for the frontier. See [Local hardware](#local-hardware-sparks).
+
+Pressure is `timeShare / remaining`: the fraction of the window still to run
+divided by the fraction of quota left, taken from the worst applicable window.
+`1.0` is exactly on pace, above that is burning faster than the clock, below is
+comfortable. It exists because 10% left an hour before reset is fine and 10%
+left six days before reset is not. When a provider reports no reset time or
+window duration, `timeShare` is 1 and pressure degenerates to inverse headroom.
+
+A classification that fails or times out falls back to `strong`. One below
+`confidenceThreshold` keeps the tier Jev picked but is marked
+`jev-low-confidence`: an uncertain answer is still better evidence than
+ignoring the answer, and discarding it would silently force every low-confidence
+turn onto the most expensive model. A routing failure never blocks the turn, and
+when no candidate is eligible the session model is left untouched.
+
+## Credit-billed providers
+
+Plan quota is measurable; a prepaid balance is not. DeepSeek, OpenRouter, Z.AI
+pay-as-you-go and friends publish no usage window, so step 4 above is the only
+thing keeping them routable — and it routes to them blind.
+
+`credits` decides what blind means:
+
+- `"on"` (default): unmeasurable providers stay candidates, ranked below any
+  provider with measured headroom. The only evidence a balance ran out is the
+  provider's own refusal, so the router listens for it: an `after_provider_response`
+  with HTTP 402, or 400/403/429 whose body matches the insufficient-balance
+  family, marks that **provider** dry in `~/.omp/jev-router-credits.json`. A dry
+  provider is dropped from the candidate set for `creditRecheckMs` (6h default),
+  then retried once — a top-up you never told the router about heals itself.
+  Ordinary rate limits and transport errors are not credit failures and are
+  ignored.
+- `"off"`: only measured plan headroom counts, plus unmeasured **plan
+  subscriptions** (OAuth credentials) — the plan caps spend upstream, so routing
+  to them blind cannot overspend. With nothing measurable and only credit-billed
+  (API-key) candidates left, the router stands down and leaves the session model
+  alone, rather than spending a balance it cannot see.
+
+A candidate counts as a plan subscription when this session's credential for its
+provider is OAuth: `AuthStorage.getCredentialOrigin` where present, otherwise the
+18.3.x `credentials.hasOAuth(provider)` / `credentials.get(provider).type` facet.
+Anything else, including an unreadable credential, is treated as credit-billed.
+
+`/jev credits <provider> dry` marks one by hand; `/jev credits <provider> topped`
+clears it immediately after you refill. `/jev` lists the currently dry providers.
+The mark is provider-wide, because a balance is provider-wide.
+
+## Install
+
+```
+git clone https://github.com/danieljohnmorris/omp-jev-router.git
+omp install ./omp-jev-router
+```
+
+`omp install` links the directory into `~/.omp/plugins`, so it loads in every
+session with no flag. Edits to the source are picked up on the next session
+start; extensions load once per process and there is no hot reload. To try it
+without installing, pass `omp -e ./omp-jev-router/src/index.ts`.
+
+Requires OMP 18.2 or later, for `ctx.models` and `ExtensionAPI.setModel`.
+
+The Jev API key is read from `JEV_API_KEY`, `TYPESAFE_API_KEY`, or the macOS
+Keychain:
+
+```
+security add-generic-password -s omp-jev-router -a "$USER" -w
+```
+
+The key is never written to the repo or to the config file.
+
+## Configuration
+
+`~/.omp/jev-router.json`. With no file, both switches are off and the extension
+makes no calls.
+
+```json
+{
+  "main": "auto",
+  "tasks": "auto",
+  "sparks": "off",
+  "candidates": [
+    { "model": "anthropic/claude-haiku-4-5", "tier": "quick" },
+    { "model": "deepseek/deepseek-flash", "tier": "quick" },
+    { "model": "anthropic/claude-sonnet-5", "tier": "balanced" },
+    { "model": "zai/glm-5.3", "tier": "balanced" },
+    { "model": "anthropic/claude-opus-5", "tier": "strong", "thinking": "high" }
+  ],
+  "taskAgents": { "quick": "sonic", "balanced": "task", "strong": "task" }
+}
+```
+
+| key | default | meaning |
+|---|---|---|
+| `main` | `off` | Route this session's model on `before_agent_start`. |
+| `tasks` | `off` | Route subagents spawned through the `task` tool. |
+| `candidates` | `[]` | Models to choose between. Empty derives them from the catalogue. |
+| `cataloguePerTier` | `3` | Providers kept per tier when candidates are derived. |
+| `taskAgents` | `{}` | Tier to agent name for delegated work. |
+| `timeoutMs` | `4000` | Jev classification deadline, capped at 10s. |
+| `quotaTimeoutMs` | `8000` | Usage-report fetch deadline. A cold probe spans every account of every provider. |
+| `quotaMaxAgeMs` | `600000` | Age past which a cached report counts as stale. |
+| `credits` | `"on"` | `"on"` keeps unmeasurable credit-billed providers routable and learns from 402s; `"off"` uses measured plan headroom and unmeasured OAuth plan subscriptions only. |
+| `sparks` | `off` | `on` puts the local cluster's models in the candidate list and prefers them while they are serving. `off` leaves cloud candidates alone. |
+| `sparksProvider` | `sparks` | Provider name the local models are reached through. |
+| `sparksTiers` | the DGX Spark map | Model id to tier for hardware you own. An id absent from this map is not a candidate at all. |
+| `sparksLivenessMs` | `5000` | How long a liveness probe result is trusted. |
+| `sparksTimeoutMs` | `2000` | One endpoint probe deadline. |
+| `creditRecheckMs` | `21600000` | How long a provider stays marked out of credits before being retried. |
+| `confidenceThreshold` | `0.6` | Below this, the tier still applies but is marked low-confidence. |
+| `maxPromptChars` | `4000` | Prompt truncation before classification. |
+| `contextReserveTokens` | `32000` | Output headroom a candidate must still have. |
+
+`model` accepts `provider/id`, a bare id, or a role alias. `thinking` accepts
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; omit it to leave the
+session's thinking level alone.
+
+### Deriving candidates
+
+With no `candidates`, the router uses the models this install is logged in to,
+via `ctx.models.list()`, the same set `--model` offers. From that list it:
+
+- bands by output price: at or below $2/M is `quick`, at or below $15/M is
+  `balanced`, above is `strong`
+- requires reasoning support above `quick`
+- drops dated snapshot ids, `:batch` routes, and image-only models
+- keeps the widest context window first, price as tiebreak, so a provider's
+  current flagship is preferred over the retired generation it replaced
+- keeps at most one model per provider per tier, so a tier spans providers and
+  survives one of them running dry
+
+Price is a rough capability proxy. Name `candidates` yourself when you care
+which models run. `/jev` reports which source is in use.
+
+## Local hardware (`sparks`)
+
+Hardware you already own is the cheapest capacity in the list and the one whose
+speed you cannot infer from price, so it gets its own switch and its own tier
+map. `/jev sparks on` makes local models candidates; with it `off` nothing local
+is eligible, even if a `sparks/…` entry sits in `candidates`.
+
+- **Tiers come from `sparksTiers`, not from price.** A local model's cost is 0,
+  which the price bands would read as `quick` for every one of them. The default
+  map rates the workhorse models `balanced` and the small ones `quick`, and
+  deliberately puts nothing at `strong`: an architecture-sized Jev floor then
+  always leaves for the frontier, whatever the cluster happens to be serving.
+- **Liveness is probed per endpoint *and* model id.** One head answers
+  `/v1/models` with every id its recipes can serve, not only the one currently
+  loaded, so an endpoint check alone would route to a model that 404s. The probe
+  is `GET /v1/models` per baseUrl, cached for `sparksLivenessMs`, and the id must
+  appear in the response. A refused connection is dead; a body this code cannot
+  parse is **not** evidence the id is absent, so it does not blackhole the
+  candidate.
+- **Local quota is a constant.** It bills nothing and has no balance to spend, so
+  its quota reads as full headroom and zero pressure and its billing is `local` —
+  never `plan`, which under `credits: "off"` is the fallback the selector uses
+  when nothing measurable is left.
+
+Cost is the reason to route here, not speed: a local single-stream decode is
+tens of tok/s against a frontier API's hundreds, so a turn that goes local is
+one where the answer was worth waiting for rather than buying.
+
+## Task routing
+
+A `task` item that already names an agent is left alone, so nategpt workers,
+reviewers and scouts stay pinned. An item with no agent, or the default `task`,
+is classified and gets the agent mapped to its tier.
+
+Task routing selects an **agent**. The `task` tool's item schema has no
+per-item model field, so the agent's own `model:` frontmatter decides the model
+and quota filtering does not reach it. Give a tier an agent whose model chain
+you trust.
+
+## Commands
+
+| command | effect |
+|---|---|
+| `/jev` | Show state, credential, candidate source, last decisions. |
+| `/jev on` / `/jev off` | Both routing switches at once. `sparks` is left as it is. |
+| `/jev main auto` / `/jev main off` | Session routing on or off. |
+| `/jev tasks auto` / `/jev tasks off` | Delegated routing on or off. |
+| `/jev sparks on` / `/jev sparks off` | Local hardware in or out of the candidate list. |
+| `/jev credits <provider> dry` | Mark a provider out of credits now. |
+| `/jev credits <provider> topped` | Clear the mark after refilling. |
+| `/jev reload` | Re-read the config file, the API key, and the credit marks. Extension code is not reloaded. |
+
+Every switch change is written back to `~/.omp/jev-router.json`, so it holds
+across restarts. Other keys in the file are left alone.
+
+Status and notifications are interactive-only. In print mode the extension
+routes silently. The status line reads
+`jev · <tier> via <source> (<confidence>) · <model> · <headroom> left · pressure <n>`,
+where `source` is `jev`, `jev-low-confidence`, `image`, or `fallback`. On any
+state other than available the quota half is replaced by the reason, for example
+`Window 7 days is exhausted`. Main and task routing share one status key, so the
+later of the two is what you see.
+
+## Development
+
+```
+bun test
+bun run typecheck
+```
+
+Tests cover quota window and account resolution, candidate selection, and
+catalogue derivation. Vitest does not work here: the OMP packages need the Bun
+runtime.
